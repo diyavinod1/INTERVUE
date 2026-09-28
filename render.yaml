@@ -17,18 +17,26 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.11"
-        
+
       - key: ENVIRONMENT
         value: production
 
       - key: LOG_LEVEL
         value: INFO
 
+      # Automatically uses the actual Render frontend URL
       - key: FRONTEND_URL
-        sync: false
+        fromService:
+          name: intervue-frontend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
 
+      # Automatically uses the actual Render backend URL
       - key: BACKEND_URL
-        sync: false
+        fromService:
+          name: intervue-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
 
       - key: DATABASE_URL
         sync: false
@@ -84,6 +92,7 @@ services:
       - key: MAX_QUESTIONS
         value: "12"
 
+
   # ------------------------------------------------------------
   # INTERVUE FRONTEND
   # ------------------------------------------------------------
@@ -102,5 +111,9 @@ services:
         destination: /index.html
 
     envVars:
+      # Automatically uses the actual Render backend URL
       - key: VITE_API_URL
-        sync: false
+        fromService:
+          name: intervue-backend
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
