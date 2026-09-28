@@ -1,249 +1,729 @@
-# Intervue
+# 🎙️ INTERVUE
 
-**Turn every answer into your next question.**
+### *Turn every answer into your next question.*
 
-Intervue is an adaptive, conversational, voice-enabled AI interview platform. It reads a
-candidate's resume and a target job description, plans an interview around the overlap and the
-gaps, and then asks questions that are shaped by what the candidate *just said* - not a fixed
-script.
+> **What if your mock interview didn't just ask questions...**
+>
+> **What if it actually listened? 👀**
 
-This README covers the architecture, how to run it locally, how to configure the three external
-services it depends on (OpenRouter, Sarvam AI, Supabase), how to test and debug it, and how to
-deploy it.
+**INTERVUE** is an adaptive AI mock interview platform that conducts interviews like an actual interviewer — using your **resume, target role, job description, previous answers, performance, and voice** to decide what should happen next.
 
----
+No boring list of 20 random questions.
 
-## 1. Architecture overview
+No "Question 1 → Question 2 → Question 3 → good luck bro." 💀
 
-```
-API (FastAPI)
-   |
-   v
-Service layer (InterviewService, ResumeService, JDService, LLMService, VoiceService)
-   |
-   v
-Agent / Orchestration layer (LangGraph StateGraph)
-   |
-   v
-Provider layer (OpenRouterProvider, SarvamSTT/TTSProvider, fallback providers)
-   |
-   v
-Database (SQLAlchemy -> PostgreSQL / Supabase, or SQLite for local dev)
-```
+Instead:
 
-Nothing skips a layer: routes never touch the database directly, and the LangGraph nodes never
-import SQLAlchemy - they only ever read and write the `InterviewState` TypedDict
-(`backend/app/agents/state.py`). That separation is what makes the orchestration logic testable
-without a database (see `backend/tests/test_decision.py`) and makes swapping a provider (a
-different LLM, a different voice vendor) a change contained to one file.
-
-### Why each technology is here
-
-| Technology | Why |
-|---|---|
-| **FastAPI** | Async-native, Pydantic-validated request/response models, automatic OpenAPI docs, dependency injection for the DB session. |
-| **Pydantic** | Every structured object that crosses a boundary (candidate profile, job profile, evaluation rubric, interview plan) is a validated model, not a loose dict - a malformed LLM response gets caught and coerced/rejected instead of silently corrupting state. |
-| **SQLAlchemy** | Real relational schema (candidates -> interviews -> questions -> answers -> evaluations -> final_reports) with foreign keys and typed columns, portable between SQLite (local dev) and PostgreSQL (Supabase, production) via one `DATABASE_URL`. |
-| **LangChain** | `ChatPromptTemplate` gives every prompt (planner, question generator, evaluator, final report) a single, reusable, readable definition (`backend/app/agents/prompts/`) instead of ad-hoc string concatenation. |
-| **LangGraph** | The actual orchestration engine. A `StateGraph` with real conditional edges decides FOLLOW_UP vs INCREASE_DIFFICULTY vs CHANGE_TOPIC vs FINISH_INTERVIEW based on state - see `backend/app/agents/graph.py` and `backend/app/agents/nodes/decision.py`. |
-| **OpenRouter** | One HTTP-compatible endpoint in front of many models, so the model is a config value (`OPENROUTER_MODEL`), not a hard-coded dependency - with an automatic, configurable fallback model. |
-| **Sarvam AI** | Primary speech-to-text/text-to-speech provider, behind a provider-agnostic interface (`SpeechToTextService`/`TextToSpeechService`) so it can be swapped or supplemented without touching business logic. |
-| **Supabase** | Supabase *is* PostgreSQL - `DATABASE_URL` points straight at it, so the app gets real relational storage rather than treating Supabase as a generic REST/JSON store. |
-| **React + TypeScript** | Typed components/hooks/services mirroring the backend's Pydantic schemas field-for-field, so a backend response shape change is caught at compile time on the frontend. |
-
-### Why NOT certain things (PRD "no buzzword engineering")
-
-No vector database, no RAG, no multi-agent framework, no microservices. Resume and job
-description parsing (`resume_service.py`, `jd_service.py`) are **deterministic, heuristic text
-processing** - not an LLM call - specifically so the system can never invent a skill, project, or
-requirement that isn't actually present in the source text. The LLM is reserved for the three
-things that genuinely need semantic reasoning: phrasing an adaptive question, scoring an answer
-against a rubric, and writing a narrative report summary. Deciding *what to do next* (harder,
-easier, follow up, change topic, finish) is deterministic Python (`agents/nodes/decision.py`), not
-another LLM call - this is also what makes the adaptive behavior unit-testable and reproducible.
+**You answer → AI evaluates → AI decides → next question adapts.**
 
 ---
 
-## 2. User flow
+## 🚀 TRY INTERVUE
 
+### 🎯 [**LIVE DEMO → INTERVUE**](https://intervue-frontend-tgi7.onrender.com)
+
+> **Best experienced with a microphone 🎙️**
+
+### ⚡ Backend Health
+
+[**API → `intervue-backend-v6ox.onrender.com/api/health`**](https://intervue-backend-v6ox.onrender.com/api/health)
+
+---
+
+# 🧠 THE IDEA
+
+Traditional mock interviews look like this:
+
+```text
+Question
+   ↓
+Answer
+   ↓
+Question
+   ↓
+Answer
+   ↓
+Question
+   ↓
+"Good job 👍"
 ```
-Landing Page
-   -> "Set up interview"
-Interview Setup (name, target role, experience level, resume upload, job description)
-   -> POST /api/interviews (creates Candidate + Interview, parses resume + JD)
-Interview Page
-   -> "How would you like to interview?" (Text / Voice)
-   -> POST /api/interviews/{id}/start (LangGraph creates the plan + opening question)
-Interview Chat
-   -> candidate answers (text or voice) -> POST /api/interviews/{id}/answer
-   -> LangGraph evaluates, decides the next action, generates the next question
-   -> candidate can switch Text <-> Voice at any point without losing progress
-   -> repeats until the question limit is reached or the candidate ends early
-Final Report Page
-   -> GET /api/interviews/{id}/report
+
+INTERVUE looks more like this:
+
+```text
+             YOUR RESUME
+                  │
+                  ▼
+          ┌───────────────┐
+          │    INTERVUE   │
+          │   AI ENGINE   │
+          └───────┬───────┘
+                  │
+          Ask the right question
+                  │
+                  ▼
+              YOU ANSWER
+                  │
+                  ▼
+             AI EVALUATES
+                  │
+        ┌─────────┼─────────┐
+        │         │         │
+     Strong    Weak      Missing
+        │         │         │
+        ▼         ▼         ▼
+      Probe    Simplify   Explore
+        │         │         │
+        └─────────┼─────────┘
+                  ▼
+          NEXT QUESTION
+```
+
+### That's the entire philosophy:
+
+> **The next question should depend on the last answer.**
+
+---
+
+# 👀 WHAT MAKES IT DIFFERENT?
+
+## 📄 01 — Your resume actually matters
+
+INTERVUE doesn't just read the first project on your resume and call it a day.
+
+It extracts and uses your **resume-wide background** to generate relevant questions.
+
+That means the interview can explore:
+
+* projects
+* internships
+* skills
+* experience
+* career story
+* achievements
+* technical background
+* behavioral experiences
+
+So instead of:
+
+> "Tell me about React."
+
+You might get:
+
+> "You mentioned building X during your internship. What was the hardest decision you had to make there?"
+
+Now we're talking. 👀
+
+---
+
+## 🎯 02 — The job description matters too
+
+INTERVUE can compare your background with the target role and identify areas worth exploring.
+
+The interview can cover:
+
+```text
+Your Resume
+     +
+Job Description
+     +
+Your Answers
+     ↓
+Personalized Interview
+```
+
+So you're not practicing **generic interview questions**.
+
+You're practicing for **your interview**.
+
+---
+
+# 🤖 03 — IT ACTUALLY ADAPTS
+
+This is the heart of INTERVUE.
+
+The system evaluates every answer and tracks things like:
+
+* correctness
+* completeness
+* technical depth
+* relevance
+* clarity
+* strengths
+* weaknesses
+* missing concepts
+* topic coverage
+
+Then a deterministic decision layer decides what should happen next.
+
+For example:
+
+```text
+Candidate gives strong answer
+          ↓
+AI identifies strong evidence
+          ↓
+Probe deeper
+          ↓
+More challenging follow-up
+```
+
+Or:
+
+```text
+Candidate struggles
+       ↓
+Weak / incomplete evidence
+       ↓
+Change direction
+       ↓
+Clarify or explore another area
+```
+
+The interview isn't following a fixed script.
+
+**The answer changes the interview.**
+
+---
+
+# 🧩 04 — NOT JUST TECHNICAL QUESTIONS
+
+INTERVUE is designed to feel more like a real interview.
+
+The interview can explore:
+
+### 💻 Technical
+
+* skills from the resume
+* job requirements
+* technical depth
+* projects
+* implementation decisions
+
+### 🧑‍💼 Behavioral
+
+* teamwork
+* communication
+* ownership
+* motivation
+* initiative
+* challenges
+* failure
+* learning
+
+### 🎭 Situational
+
+* conflicting priorities
+* ambiguous tasks
+* unhappy teammates or stakeholders
+* deadline trade-offs
+* discovering mistakes before delivery
+
+So the interview isn't:
+
+> "Explain REST APIs."
+
+for 45 minutes straight. 😭
+
+---
+
+# 🎙️ 05 — TALK TO IT
+
+INTERVUE supports both:
+
+```text
+⌨️ TEXT
+  ↕
+🎙️ VOICE
+```
+
+For voice interviews, the pipeline is:
+
+```text
+Browser Microphone
+        ↓
+MediaRecorder
+        ↓
+WebM / Opus Audio
+        ↓
+FFmpeg
+        ↓
+Mono 16k PCM WAV
+        ↓
+Sarvam Speech-to-Text
+        ↓
+Candidate Answer
+        ↓
+AI Evaluation
+```
+
+And when primary transcription isn't available, the system has a fallback speech-recognition path.
+
+Because:
+
+> **"Sorry, I couldn't hear you"**
+
+shouldn't be the final boss of your interview. 💀
+
+---
+
+# 🗣️ THE AI ALSO TALKS BACK
+
+The platform supports AI-generated speech using Sarvam TTS.
+
+So the experience becomes:
+
+```text
+        🤖 AI INTERVIEWER
+              │
+              ▼
+        asks a question
+              │
+              ▼
+          🎙️ YOU
+              │
+              ▼
+         gives answer
+              │
+              ▼
+        🧠 AI EVALUATES
+              │
+              ▼
+       decides what next
+              │
+              ▼
+        🤖 AI INTERVIEWER
+```
+
+It's much closer to an actual conversation than filling out a questionnaire.
+
+---
+
+# 🎮 CHOOSE YOUR INTERVIEW MODE
+
+INTERVUE supports four interview lengths:
+
+| Mode             | Questions | Vibe                                   |
+| ---------------- | --------: | -------------------------------------- |
+| ⚡ **Quick**      |     **5** | Focused warm-up                        |
+| 🎯 **Standard**  |     **8** | Balanced interview                     |
+| 🧠 **Deep Dive** |    **12** | More detailed assessment               |
+| 🧬 **Adaptive**  |  **6–12** | AI decides when enough evidence exists |
+
+### Adaptive mode is the interesting one.
+
+It doesn't blindly say:
+
+> "We have reached Question 12. Bye."
+
+Instead, it can finish once the interview has gathered enough useful evidence.
+
+---
+
+# 🧠 UNDER THE HOOD
+
+Here's where the fun stuff happens.
+
+```text
+                    ┌───────────────────┐
+                    │     FRONTEND      │
+                    │    React + TS     │
+                    └─────────┬─────────┘
+                              │
+                         HTTP / REST
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │      FASTAPI      │
+                    │      BACKEND      │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │    INTERVIEW      │
+                    │     SERVICE       │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │    LANGGRAPH      │
+                    │  INTERVIEW GRAPH  │
+                    └─────────┬─────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+             Question Node       Evaluation Node
+                    │                   │
+                    └─────────┬─────────┘
+                              ▼
+                    ┌───────────────────┐
+                    │ DECISION ENGINE   │
+                    │ What happens next?│
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    Next Interview Action
+                              │
+                              ▼
+                    ┌───────────────────┐
+                    │    PostgreSQL     │
+                    │     Supabase      │
+                    └───────────────────┘
 ```
 
 ---
 
-## 3. Folder structure
+# 🧠 LANGGRAPH = THE INTERVIEW BRAIN
 
+INTERVUE uses **LangGraph** to represent the interview flow as a stateful graph.
+
+Conceptually:
+
+```text
+START
+  ↓
+Load Interview State
+  ↓
+Generate Question
+  ↓
+Candidate Answers
+  ↓
+Evaluate Answer
+  ↓
+Update State
+  ↓
+Decision
+  │
+  ├── Ask Follow-up
+  ├── Ask New Topic
+  ├── Increase Difficulty
+  ├── Explore Weak Area
+  └── Finish Interview
 ```
-intervue/
-  backend/
-    app/
-      main.py                     FastAPI app, CORS, exception handlers, /api/health, /api/config
-      api/routes/                 interviews.py, resume.py, voice.py - thin route handlers
-      core/                       config.py (env settings), logging.py, security.py (upload validation, prompt-injection defusing)
-      db/                         database.py (engine/session), session.py (get_db, init_db)
-      models/                     SQLAlchemy models: candidate, interview, question, answer, evaluation, report
-      schemas/                    Pydantic schemas: candidate/job profiles, interview plan, evaluation rubric, API request/response shapes
-      repositories/               interview_repository.py - the only file with raw SQLAlchemy queries
-      services/                   interview_service.py (orchestrator), resume_service.py, jd_service.py, llm_service.py, voice_service.py
-      agents/
-        state.py                  InterviewState TypedDict - the single source of truth threaded through the graph
-        graph.py                  compiled LangGraph StateGraph
-        nodes/                    planning.py, question_generation.py, evaluation.py, decision.py, final_report.py
-        prompts/                  LangChain ChatPromptTemplate definitions
-      providers/
-        llm/                      base.py (ABC), openrouter.py (retries + fallback model)
-        voice/                    base.py (ABC), sarvam.py (primary), fallback.py (gTTS/SpeechRecognition)
-    tests/                        pytest suite - see Section 8
-    requirements.txt
-    .env.example
-  frontend/
-    src/
-      components/                 Chat/, MessageBubble/, InterviewSetup helpers, ResumeUploader/, VoiceRecorder/, AudioPlayer/, ModeSwitcher/, ProgressIndicator/, ThemeToggle/, Report/, Landing/
-      pages/                      LandingPage, InterviewSetupPage, InterviewPage, ReportPage
-      services/                   api.ts, interviewApi.ts, resumeApi.ts, voiceApi.ts
-      hooks/                      useInterview.ts, useVoice.ts, useTheme.ts
-      types/                      candidate.ts, interview.ts, report.ts
-    package.json
-  README.md
+
+The important part?
+
+### The LLM does NOT control everything.
+
+The LLM handles things it's good at:
+
+> **semantic reasoning**
+
+Python handles things that should be deterministic:
+
+> **control flow + limits + interview rules**
+
+That separation makes the system much easier to reason about.
+
+---
+
+# 🧠 ADAPTIVE INTERVIEW ENGINE
+
+At a high level:
+
+```python
+answer
+   ↓
+evaluate(answer)
+   ↓
+update_interview_state()
+   ↓
+decide_next_action()
+   ↓
+generate_next_question()
+```
+
+The system keeps track of things like:
+
+```text
+Current Topic
+Current Difficulty
+Questions Asked
+Question Limit
+Covered Topics
+Consecutive Strong Answers
+Consecutive Weak Answers
+Topic Scores
+```
+
+This lets the interview evolve instead of simply progressing linearly.
+
+---
+
+# 📄 RESUME INTELLIGENCE — WITHOUT RAG
+
+One deliberate architecture choice:
+
+### INTERVUE does not require a vector database or RAG pipeline for resume grounding.
+
+Instead, the application:
+
+```text
+Resume File
+    ↓
+Extract Text
+    ↓
+Create Structured Profile
+    ↓
+Store Raw Resume Text
+    ↓
+Inject Relevant Resume Context
+    ↓
+LLM Question Generation
+```
+
+The resume is grounded directly into the interview context.
+
+That keeps the architecture simpler for this use case.
+
+No unnecessary:
+
+```text
+Vector DB
+Embeddings
+Retriever
+Chunking pipeline
+RAG orchestration
+```
+
+just because the word **AI** appeared somewhere. 😭
+
+---
+
+# 🛡️ RELIABILITY
+
+AI systems are cool.
+
+AI systems that randomly die halfway through your interview?
+
+**Not cool.**
+
+INTERVUE includes reliability mechanisms around the external AI services.
+
+### OpenRouter
+
+```text
+LLM Request
+    ↓
+Timeout / Retry Handling
+    ↓
+Primary Model
+    ↓
+Fallback Model
+```
+
+### Voice
+
+```text
+Browser Audio
+     ↓
+Audio Conversion
+     ↓
+Sarvam STT
+     ↓
+Fallback Recognizer
+```
+
+The application also validates and limits uploaded resume content before using it in prompts.
+
+---
+
+# 🗄️ DATABASE
+
+INTERVUE uses **PostgreSQL through Supabase** with SQLAlchemy.
+
+The core data model looks like:
+
+```text
+Candidate
+   │
+   └───────────────┐
+                   ▼
+               Interview
+                   │
+          ┌────────┼────────┐
+          ▼        ▼        ▼
+      Question   Answer   Evaluation
+          │        │        │
+          └────────┴────────┘
+                   │
+                   ▼
+              Final Report
+```
+
+### Main entities
+
+* `Candidate`
+* `Interview`
+* `Question`
+* `Answer`
+* `Evaluation`
+* `Final Report`
+
+Interview planning and analysis data are stored in structured JSON fields where appropriate.
+
+---
+
+# ⚙️ TECH STACK
+
+| Layer               | Technology            |
+| ------------------- | --------------------- |
+| 🎨 Frontend         | React + TypeScript    |
+| ⚡ Build             | Vite                  |
+| 🎨 Styling          | Tailwind CSS          |
+| 🌐 Routing          | React Router          |
+| 🐍 Backend          | FastAPI               |
+| 🧠 AI Workflow      | LangGraph + LangChain |
+| 🤖 LLM              | OpenRouter            |
+| 🎙️ STT             | Sarvam                |
+| 🔊 TTS              | Sarvam                |
+| 🗄️ Database        | PostgreSQL / Supabase |
+| 🧱 ORM              | SQLAlchemy            |
+| 📄 Resume Parsing   | pypdf + python-docx   |
+| 🎤 Audio Processing | FFmpeg                |
+| 🧪 Testing          | Pytest                |
+| ☁️ Deployment       | Render                |
+
+---
+
+# 🏗️ PROJECT STRUCTURE
+
+```text
+INTERVUE/
+│
+├── backend/
+│   ├── app/
+│   │   ├── agents/
+│   │   │   ├── nodes/
+│   │   │   ├── prompts/
+│   │   │   └── graph.py
+│   │   │
+│   │   ├── api/
+│   │   │   └── routes/
+│   │   │
+│   │   ├── core/
+│   │   ├── db/
+│   │   ├── models/
+│   │   ├── schemas/
+│   │   ├── services/
+│   │   └── providers/
+│   │
+│   ├── tests/
+│   └── requirements.txt
+│
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── pages/
+│   │   ├── services/
+│   │   └── types/
+│   │
+│   ├── package.json
+│   └── vite.config.ts
+│
+├── render.yaml
+└── README.md
 ```
 
 ---
 
-## 4. Database schema
+# 🔥 THE ENGINE IN ONE SENTENCE
 
-```
-candidates
-  id (pk), full_name, target_role, experience_level,
-  resume_filename, resume_raw_text, resume_profile (jsonb),
-  job_description_text, job_profile (jsonb), created_at
-
-interviews
-  id (pk), candidate_id (fk -> candidates),
-  status, mode, interview_plan (jsonb),
-  current_topic, current_difficulty,
-  questions_asked, question_limit,
-  overall_score, topic_scores (jsonb),
-  consecutive_strong, consecutive_weak, covered_topics (jsonb),
-  created_at, started_at, completed_at
-
-questions
-  id (pk), interview_id (fk -> interviews), sequence_index,
-  topic, difficulty, text, reason (jsonb), action_type, created_at
-
-answers
-  id (pk), question_id (fk -> questions, unique), interview_id (fk),
-  text, mode, audio_duration_seconds, word_count, filler_word_count,
-  response_latency_ms, created_at
-
-evaluations
-  id (pk), answer_id (fk -> answers, unique), interview_id (fk),
-  overall_score, correctness, completeness, technical_depth, relevance, clarity,
-  strengths (jsonb), weaknesses (jsonb), missing_concepts (jsonb),
-  feedback, recommended_action, created_at
-
-final_reports
-  id (pk), interview_id (fk -> interviews, unique),
-  overall_score, topic_scores (jsonb), strengths (jsonb), weaknesses (jsonb),
-  technical_gaps (jsonb), recommended_learning_areas (jsonb),
-  question_count, summary, created_at
-```
-
-`resume_profile`, `job_profile`, `interview_plan`, and the various score/list fields are `JSON`
-columns because their internal shape is inherently semi-structured (a variable-length skills list,
-a variable number of projects); every field that's *always* present and simple (name, role,
-status, scores) is a real typed column, not buried in JSON.
+> **INTERVUE combines resume-aware context, job-aware planning, LLM evaluation, deterministic decision logic, and voice interaction to create an interview that adapts to the candidate instead of forcing the candidate through a fixed script.**
 
 ---
 
-## 5. LangGraph state, nodes, and edges
+# 🧪 TESTING
 
-**State** (`agents/state.py`): a single `InterviewState` TypedDict carrying identity fields,
-static context (candidate/job profiles, interview plan), per-turn working fields (current
-question/answer/evaluation/action), rolling memory (question/answer/evaluation history, capped to
-the last 6 turns when rendered into prompts - see `agents/prompts/context.py`), scoring
-aggregates, and progress/termination fields.
+The backend includes automated tests covering important interview behavior.
 
-**Nodes** (`agents/nodes/`):
-- `planning.py` - deterministically builds a balanced roadmap containing resume-grounded topics, a
-  resume-wide topic, behavioral areas (ownership/initiative, teamwork/communication, challenges/failure/learning),
-  and job-specific technical skills. The LLM only phrases one-line rationales for those topics.
-- `question_generation.py` - the one call that actually writes the interview question. It receives
-  both the structured candidate profile and the original extracted full resume, so details omitted
-  by the deterministic parser remain available to the interviewer.
-- `evaluation.py` - scores the candidate's last answer against a 5-dimension rubric via a
-  structured-JSON LLM call, validated by `AnswerEvaluation` (Pydantic).
-- `decision.py` - **the real agent.** Deterministic score-threshold and streak-counter logic (see
-  the module docstring for the exact priority-ordered rules) decides FOLLOW_UP /
-  INCREASE_DIFFICULTY / DECREASE_DIFFICULTY / CHANGE_TOPIC / ASK_RESUME_QUESTION /
-  ASK_JOB_SPECIFIC_QUESTION / CLARIFY / FINISH_INTERVIEW.
-- `final_report.py` - deterministically aggregates topic/overall scores from the full evaluation
-  history, and makes one LLM call to write the narrative summary and learning recommendations.
+Examples include:
 
-**Conditional edges** (`agents/graph.py`):
+* interview planning
+* question limits
+* adaptive decisions
+* behavioral topics
+* situational topics
+* fallback behavior
+* state transitions
 
-```
-START --(phase == "start")--> create_plan -> generate_question -> END
-START --(phase == "answer_submitted")--> evaluate_answer -> decide_next_action
-                                                                 |
-                                                (next_action == FINISH_INTERVIEW?)
-                                                    /                        \
-                                                  no                          yes
-                                                   |                           |
-                                          generate_question           generate_final_report
-                                                   |                           |
-                                                  END                         END
+The goal isn't just:
+
+```text
+"It works on my laptop."
 ```
 
-Because Intervue is a request/response web app rather than a long-running process, "WAIT FOR
-ANSWER" from the PRD's conceptual diagram is the natural HTTP request boundary: the graph runs to
-a question being generated, returns, and `InterviewService` persists state and waits for the next
-API call. When the candidate answers, a fresh graph invocation resumes from the
-`"answer_submitted"` entry point using state rehydrated from the database. This intentionally
-avoids relying on LangGraph's interrupt/checkpoint machinery for something a plain database row
-already solves clearly.
+The goal is:
+
+```text
+"It still works after I changed something at 2 AM."
+```
 
 ---
 
-## 6. Setup instructions
+# 🚀 RUN LOCALLY
 
-### 6.1 Prerequisites
-- Python 3.11+
-- Node.js 18+
-- An [OpenRouter](https://openrouter.ai/keys) API key
-- A [Sarvam AI](https://www.sarvam.ai/) API key (optional for local dev - see 6.5)
-- A [Supabase](https://supabase.com) project (optional for local dev - SQLite works out of the box)
+## 1. Clone
 
-### 6.2 Backend setup
+```bash
+git clone https://github.com/diyavinod1/INTERVUE.git
+cd INTERVUE
+```
+
+---
+
+## 2. Backend
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-cp .env.example .env
-# edit .env and set at minimum OPENROUTER_API_KEY
-uvicorn app.main:app --reload --port 8000
+
+python -m venv .venv
+source .venv/bin/activate
 ```
 
-The backend creates its tables automatically on startup (`init_db()` in `main.py`) - no manual
-migration step is needed for local development. Visit `http://localhost:8000/docs` for the
-interactive OpenAPI docs.
+Windows:
 
-### 6.3 Frontend setup
+```bash
+.venv\Scripts\activate
+```
+
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Create your environment file:
+
+```bash
+cp .env.example .env
+```
+
+Then configure your API keys and database.
+
+Start the backend:
+
+```bash
+python -m uvicorn app.main:app --reload --port 8000
+```
+
+Backend:
+
+```text
+http://localhost:8000
+```
+
+Health check:
+
+```text
+http://localhost:8000/api/health
+```
+
+---
+
+# 🎨 FRONTEND
 
 ```bash
 cd frontend
@@ -251,186 +731,263 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:5173`. The Vite dev server proxies `/api/*` to `http://localhost:8000`
-(see `vite.config.ts`) - no CORS configuration needed in development beyond what's already in
-`backend/app/main.py`.
+Frontend:
 
-### 6.4 Supabase setup (production database)
-
-1. Create a project at [supabase.com](https://supabase.com).
-2. In **Project Settings -> Database**, copy the connection string (use the "Session pooler" or
-   direct connection string, in the form `postgresql://postgres:[PASSWORD]@[HOST]:5432/postgres`).
-3. Set `DATABASE_URL` in `backend/.env` to that string.
-4. Restart the backend - `init_db()` creates all tables (`candidates`, `interviews`, `questions`,
-   `answers`, `evaluations`, `final_reports`) on startup the same way it does for SQLite.
-5. (Optional) If you want resume files stored in Supabase Storage rather than processed in-memory
-   and discarded, set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` - the
-   current implementation parses resumes in-memory and does not persist the raw file, only the
-   extracted text and structured profile, which keeps the storage layer simple; wiring in Supabase
-   Storage is a natural extension point (see Section 11).
-
-**Never** put `SUPABASE_SERVICE_ROLE_KEY` (or any other secret) in frontend code or in any
-response the frontend receives - `GET /api/config` is the only endpoint that exposes configuration
-to the browser, and it hand-picks non-secret fields only.
-
-### 6.5 OpenRouter setup
-
-1. Create an account and API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-2. Set `OPENROUTER_API_KEY` in `backend/.env`.
-3. `OPENROUTER_MODEL` and `OPENROUTER_FALLBACK_MODEL` are plain config strings - browse
-   [openrouter.ai/models](https://openrouter.ai/models) for current options. Free-tier models
-   change over time; if the default in `.env.example` is no longer available, just swap in a
-   current model slug. Nothing else in the codebase needs to change.
-4. Retries, timeout, and fallback behavior are all configurable via `OPENROUTER_MAX_RETRIES`,
-   `OPENROUTER_TIMEOUT_SECONDS`, and `OPENROUTER_FALLBACK_MODEL` - see
-   `providers/llm/openrouter.py`.
-
-### 6.6 Sarvam AI setup (voice)
-
-1. Get an API key at [sarvam.ai](https://www.sarvam.ai/).
-2. Set `SARVAM_API_KEY` in `backend/.env`.
-3. If you don't set it, voice mode still doesn't crash the app: every voice call falls back to
-   gTTS (text-to-speech) / SpeechRecognition (speech-to-text) if `ENABLE_VOICE_FALLBACK=true`
-   (the default), or returns a clear 503 the frontend surfaces as "switch to text" if fallback is
-   disabled. Text mode works with zero voice configuration at all.
-
-**Production voice prerequisite:** FFmpeg must be installed on the backend host and available on
-`PATH`. Browser recordings are commonly WebM/Opus and are normalized to mono 16 kHz PCM WAV
-before Sarvam STT or the fallback recognizer receives them.
-
-### 6.7 Environment variables reference
-
-See `backend/.env.example` for the full list with inline comments. Summary:
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `OPENROUTER_API_KEY` | Yes (for LLM features) | Auth for OpenRouter |
-| `OPENROUTER_MODEL` | No (has default) | Primary model slug |
-| `OPENROUTER_FALLBACK_MODEL` | No (has default) | Used if the primary model fails |
-| `SARVAM_API_KEY` | No | Auth for Sarvam voice; falls back gracefully if unset |
-| `ENABLE_VOICE_FALLBACK` | No (default true) | Whether to use gTTS/SpeechRecognition if Sarvam fails |
-| `DATABASE_URL` | No (defaults to local SQLite) | Point at Supabase Postgres in production |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | No | Only needed for Supabase Storage integration |
-| `FRONTEND_URL` | No (has default) | Used for CORS allow-origin |
-| `MAX_RESUME_SIZE_MB` | No (default 5) | Upload size limit |
-| `MIN_QUESTIONS` / `MAX_QUESTIONS` | No (defaults 6/12) | Interview length bounds |
-
----
-
-## 7. Local development workflow
-
-Run the backend and frontend in two terminals as shown in Section 6.2/6.3. A typical loop:
-
-1. Edit a backend file -> `uvicorn --reload` picks it up automatically.
-2. Edit a frontend file -> Vite HMR updates the browser instantly.
-3. Check `http://localhost:8000/docs` to try an endpoint directly without the UI.
-4. Run `pytest` (Section 8) before committing changes to `agents/` or `services/`.
-
----
-
-## 8. Testing
-
-```bash
-cd backend
-pytest -q
+```text
+http://localhost:5173
 ```
 
-The suite (`backend/tests/`) does **not** just check for HTTP 200s. It covers:
+---
 
-- `test_decision.py` - the deterministic adaptive engine: strong answer -> harder, weak answer ->
-  easier, two weak answers in a row -> topic change, vague/incomplete answer -> clarify, topic
-  exhaustion -> topic change, question limit -> finish, score/topic-score aggregation.
-- `test_resume_service.py` / `test_jd_service.py` - deterministic parsing extracts what's actually
-  present and never invents skills/technologies that aren't in the source text.
-- `test_evaluation_schema.py` - malformed LLM output (out-of-range scores, non-numeric scores,
-  invalid enum values) is clamped or rejected rather than silently corrupting state.
-- `test_llm_provider.py` - OpenRouter primary-model failure correctly falls back to the secondary
-  model; total failure raises a clear error; missing API key is caught early.
-- `test_voice_service.py` - Sarvam failure falls back to the secondary voice provider; total
-  voice failure raises `VoiceUnavailableError` (which the API layer turns into a 503 the frontend
-  can act on); filler-word counting is purely lexical.
-- `test_interview_flow.py` - a full interview lifecycle end-to-end (with the LLM layer mocked, so
-  it runs with no network access and no API key): start -> strong answer -> mid-interview mode
-  switch (text to voice) -> weak answer -> reaching the question limit -> a generated final report
-  with the full, mode-mixed conversation transcript intact. A second test confirms an LLM outage
-  during evaluation degrades to a neutral fallback score instead of crashing the interview.
+# 🔐 ENVIRONMENT VARIABLES
 
-All 30 tests pass with no external network access, because every LLM/voice call in the flow tests
-is mocked at the provider boundary - which is exactly the seam the provider-abstraction pattern
-(Section 1) was designed to make testable.
+INTERVUE uses environment variables for external services and deployment configuration.
+
+Important variables include:
+
+```env
+DATABASE_URL=
+
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=
+OPENROUTER_FALLBACK_MODEL=
+
+SARVAM_API_KEY=
+SARVAM_BASE_URL=
+SARVAM_TTS_VOICE=
+SARVAM_STT_LANGUAGE=
+
+SUPABASE_URL=
+SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+FRONTEND_URL=
+BACKEND_URL=
+
+ENVIRONMENT=
+LOG_LEVEL=
+```
+
+### ⚠️ Never commit real API keys.
+
+Your `.env` belongs on your machine.
+
+Your production secrets belong in your deployment environment.
+
+Not in GitHub.
+
+Not in screenshots.
+
+Definitely not in a README. 😭
 
 ---
 
-## 9. Debugging
+# ☁️ PRODUCTION ARCHITECTURE
 
-- **`GET /api/health`** - basic liveness check.
-- **`GET /api/config`** - confirms which non-secret settings the backend loaded.
-- **Structured logs**: every lifecycle event (interview created, LLM fallback used, provider
-  failure, voice fallback used) is logged as `key=value` pairs via `core/logging.py` - grep the
-  backend's stdout for `error=` or `_failed` to find failures quickly. API keys and full
-  candidate answer text are never logged.
-- **"Both primary and fallback models failed"** - check `OPENROUTER_API_KEY` is set and the model
-  slugs in `.env` are still valid on [openrouter.ai/models](https://openrouter.ai/models).
-- **Voice always falls back / never uses Sarvam** - check `SARVAM_API_KEY`; the Sarvam provider
-  raises immediately with a clear message if it's unset.
-- **CORS errors in the browser console** - confirm `FRONTEND_URL` in `backend/.env` matches the
-  URL you're actually loading the frontend from (default `http://localhost:5173`).
-- **"Interview not found" (404)** - the interview ID in the URL doesn't exist in the database
-  currently in use; if you recently switched `DATABASE_URL` (e.g. SQLite -> Supabase), old
-  interview links from the previous database won't resolve.
+INTERVUE is deployed using **Render + Supabase**.
 
----
+```text
+                 INTERNET
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   Render Frontend      Render Backend
+       React                 FastAPI
+          │                   │
+          │                   ├──────► OpenRouter
+          │                   │
+          │                   ├──────► Sarvam
+          │                   │
+          │                   ▼
+          │              Supabase
+          │             PostgreSQL
+          │
+          └──────── API ────────►
+```
 
-## 10. Deployment
-
-This is a two-service deployment (no special orchestration needed):
-
-1. **Database**: use your Supabase project directly - no separate step, since the backend talks
-   to it over the standard Postgres protocol.
-2. **Backend**: deploy `backend/` to any Python host (Render, Railway, Fly.io, a plain VM). Set
-   the environment variables from Section 6.7. Run with
-   `uvicorn app.main:app --host 0.0.0.0 --port $PORT`. Set `ENVIRONMENT=production` and
-   `FRONTEND_URL` to your deployed frontend's URL (for CORS).
-3. **Frontend**: `npm run build` in `frontend/` produces a static `dist/` folder - deploy it to
-   any static host (Vercel, Netlify, Cloudflare Pages). Point its API calls at your deployed
-   backend by adjusting the dev-only Vite proxy assumption: in production, either serve the
-   frontend from the same origin as the backend (simplest - no CORS needed at all) or set the
-   `BASE_URL` constant in `frontend/src/services/api.ts` to your backend's full URL.
-4. Double-check `backend/.env` is **not** committed and that the deployed backend's environment
-   variables are set through your host's secret manager, not baked into the image.
+Production URLs are configured through environment variables rather than hardcoded into the application.
 
 ---
 
-## 11. Common errors
+# 🎨 DESIGN PHILOSOPHY
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `OPENROUTER_API_KEY is not set` | `.env` missing or not loaded | Confirm `backend/.env` exists and `OPENROUTER_API_KEY=` has a real value; restart uvicorn |
-| Resume upload rejected with 400 | Wrong extension/MIME type, empty file, or over `MAX_RESUME_SIZE_MB` | Upload a real `.pdf` or `.docx` under the size limit |
-| Interview stuck on "Preparing your first question..." | OpenRouter unreachable and no fallback model configured, or network blocked | Check backend logs for `question_generation_failed`; the app will still produce a deterministic fallback question rather than hang indefinitely, so a true hang points at a network/DNS issue, not app logic |
-| Voice never plays audio | Sarvam and fallback (gTTS) both failed, likely no outbound internet from the backend host | Check backend logs for `fallback_tts_failed`; switch to text mode meanwhile |
-| `sqlite3.OperationalError: database is locked` | Multiple backend processes writing to the same SQLite file in local dev | Use one uvicorn process locally, or switch `DATABASE_URL` to Postgres/Supabase |
-| Frontend shows CORS error | `FRONTEND_URL` mismatch | Match it exactly (including port) to where the frontend is actually served from |
+INTERVUE intentionally avoids the usual:
+
+```text
+🌌 purple gradient
+✨ floating particles
+🤖 giant glowing robot
+💎 "AI-powered" repeated 47 times
+```
+
+Instead:
+
+```text
+Dark
+Minimal
+Professional
+Calm
+Human
+Focused
+```
+
+The interface is designed to feel like a serious interview product rather than an AI demo from 2023.
+
+### Visual system
+
+```text
+Background     #0B0F14
+Surface        #121820
+Elevated       #202833
+Primary        #3B82F6
+Hover          #2563EB
+Secondary      #8B949E
+Success        #22C55E
+```
 
 ---
 
-## 12. Future improvements
+# 🧭 PRODUCT PRINCIPLES
 
-- Resume file storage in Supabase Storage (currently resumes are parsed in-memory and only the
-  extracted text/profile is persisted, not the original file).
-- Streaming question generation (token-by-token) instead of waiting for the full LLM response.
-- Alembic migrations instead of `create_all` for schema evolution in production.
-- Multi-language interviews (Sarvam supports multiple Indian languages - `SARVAM_STT_LANGUAGE`
-  and `SARVAM_TTS_VOICE` are already configurable per-deployment; a per-interview language
-  selector on the setup page is a natural next step).
-- Authenticated candidate accounts and an interview history dashboard (currently every interview
-  is accessed by its unguessable UUID link, with no login).
+### 1. Conversation > Questionnaire
 
+The interview should feel like a conversation.
 
-### Interview length
-Candidates can choose Quick (5 questions), Standard (8), Deep Dive (12), or Adaptive (6–12). Adaptive uses the same 12-question safety ceiling but can finish early when enough evidence has been collected across the interview.
+### 2. Context > Randomness
 
+Questions should have a reason.
 
-### Interview question mix
+### 3. Evidence > Buzzwords
 
-Intervue deliberately mixes a human opening (`tell me about yourself` / career story), resume-grounded questions, role-specific technical questions, behavioral questions, and hypothetical/situational judgment questions. Short interviews reserve room for non-technical coverage instead of becoming technical-only.
+The system evaluates actual answers.
+
+### 4. Adaptation > Fixed Scripts
+
+The next question should respond to what happened before.
+
+### 5. Reliability > AI Magic
+
+Deterministic rules handle deterministic behavior.
+
+### 6. Human Experience > Tech Demo
+
+The candidate should forget they're navigating a workflow.
+
+---
+
+# 🛣️ WHAT'S NEXT?
+
+INTERVUE has plenty of room to grow.
+
+Possible future directions:
+
+```text
+📊 richer analytics
+🎯 company-specific interview packs
+🧠 stronger role-specific evaluation
+🎙️ more natural voice conversations
+📈 long-term candidate progress
+🏆 interview history & benchmarking
+👥 recruiter / interviewer dashboards
+🔐 authentication & profiles
+```
+
+---
+
+# 💡 WHY I BUILT IT
+
+Because practicing interviews shouldn't mean memorizing answers to:
+
+> "What are your strengths?"
+
+for the 700th time. 😭
+
+Real interviews are dynamic.
+
+Interviewers listen.
+
+They notice what you say.
+
+They notice what you don't say.
+
+They ask follow-ups.
+
+They change direction.
+
+They dig deeper when something sounds interesting.
+
+They move on when you've demonstrated enough.
+
+**INTERVUE tries to bring that behavior into an AI-powered practice environment.**
+
+---
+
+# 🎙️ THE WHOLE PRODUCT
+
+```text
+        RESUME
+           +
+    JOB DESCRIPTION
+           +
+      CAREER STORY
+           +
+       YOUR ANSWER
+           +
+      VOICE / TEXT
+           ↓
+    ┌───────────────┐
+    │    INTERVUE   │
+    │               │
+    │  UNDERSTANDS  │
+    │       ↓       │
+    │  EVALUATES    │
+    │       ↓       │
+    │  DECIDES      │
+    │       ↓       │
+    │  ADAPTS       │
+    └───────┬───────┘
+            ↓
+      NEXT QUESTION
+            ↓
+       BETTER PRACTICE
+```
+
+---
+
+# ⭐ IF YOU MADE IT THIS FAR...
+
+You probably want to try it now. 😭
+
+## 🎙️ [**OPEN INTERVUE →**](https://intervue-frontend-tgi7.onrender.com)
+
+Upload your resume.
+
+Choose your role.
+
+Pick your interview mode.
+
+Turn on your mic.
+
+And let the interviewer begin.
+
+---
+
+## 🧠 INTERVUE
+
+### *Don't practice questions.*
+
+### **Practice being interviewed.** 🎙️
+
+---
+
+<p align="center">
+
+**Built with React • FastAPI • LangGraph • OpenRouter • Sarvam • PostgreSQL • Supabase**
+
+</p>
+
+<p align="center">
+
+⭐ If you found the project interesting, consider giving the repo a star.
+
+</p>
