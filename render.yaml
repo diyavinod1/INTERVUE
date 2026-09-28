@@ -1,1 +1,103 @@
+services:
+  # ------------------------------------------------------------
+  # INTERVUE BACKEND
+  # ------------------------------------------------------------
+  - type: web
+    name: intervue-backend
+    runtime: python
+    plan: free
+    rootDir: backend
 
+    buildCommand: pip install -r requirements.txt
+
+    startCommand: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+
+      - key: LOG_LEVEL
+        value: INFO
+
+      - key: FRONTEND_URL
+        sync: false
+
+      - key: BACKEND_URL
+        sync: false
+
+      - key: DATABASE_URL
+        sync: false
+
+      - key: OPENROUTER_API_KEY
+        sync: false
+
+      - key: OPENROUTER_MODEL
+        value: meta-llama/llama-3.1-8b-instruct:free
+
+      - key: OPENROUTER_FALLBACK_MODEL
+        value: meta-llama/llama-3.1-70b-instruct
+
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+
+      - key: OPENROUTER_TIMEOUT_SECONDS
+        value: "30"
+
+      - key: OPENROUTER_MAX_RETRIES
+        value: "2"
+
+      - key: SARVAM_API_KEY
+        sync: false
+
+      - key: SARVAM_BASE_URL
+        value: https://api.sarvam.ai
+
+      - key: SARVAM_TTS_VOICE
+        value: meera
+
+      - key: SARVAM_STT_LANGUAGE
+        value: en-IN
+
+      - key: ENABLE_VOICE_FALLBACK
+        value: "true"
+
+      - key: SUPABASE_URL
+        sync: false
+
+      - key: SUPABASE_ANON_KEY
+        sync: false
+
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      - key: MAX_RESUME_SIZE_MB
+        value: "5"
+
+      - key: MIN_QUESTIONS
+        value: "6"
+
+      - key: MAX_QUESTIONS
+        value: "12"
+
+  # ------------------------------------------------------------
+  # INTERVUE FRONTEND
+  # ------------------------------------------------------------
+  - type: web
+    name: intervue-frontend
+    runtime: static
+    rootDir: frontend
+
+    buildCommand: npm ci && npm run build
+
+    staticPublishPath: dist
+
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    envVars:
+      - key: VITE_API_URL
+        sync: false
