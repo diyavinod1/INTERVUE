@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { @apply antialiased; }
+  body {
+    @apply bg-paper text-ink font-sans transition-colors duration-200;
+    min-width: 320px;
+  }
+  .dark body { @apply bg-ink text-paper; }
+  ::selection { @apply bg-accent/20; }
+  :focus-visible {
+    outline: 2px solid #3B82F6;
+    outline-offset: 3px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: .01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .surface {
+    @apply bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-ink text-paper dark:bg-paper dark:text-ink
+      px-5 py-2.5 font-medium text-sm tracking-tight transition-all duration-150
+      hover:opacity-90 active:scale-[.98] disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg surface
+      px-5 py-2.5 font-medium text-sm tracking-tight transition-all duration-150
+      hover:border-accent/50 active:scale-[.98] disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .btn-accent {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-accent text-white
+      px-5 py-2.5 font-medium text-sm tracking-tight transition-all duration-150
+      hover:bg-accent-dark active:scale-[.98] disabled:opacity-40 disabled:pointer-events-none;
+  }
+  .input-field {
+    @apply w-full rounded-lg surface px-3.5 py-2.5 text-sm placeholder:text-ink-muted dark:placeholder:text-paper/35
+      focus:border-accent focus:ring-1 focus:ring-accent/20 outline-none transition-colors;
+  }
+  .label-text {
+    @apply text-[11px] font-semibold uppercase tracking-[.12em] text-ink-muted dark:text-paper/50;
+  }
+  .eyebrow {
+    @apply text-[11px] font-semibold uppercase tracking-[.16em] text-accent;
+  }
+  .quiet-link {
+    @apply text-sm text-ink-muted dark:text-paper/55 hover:text-ink dark:hover:text-paper transition-colors;
+  }
+}
