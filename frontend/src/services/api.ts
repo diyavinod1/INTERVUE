@@ -1,4 +1,4 @@
-const BASE_URL = ""; // same-origin; Vite dev server proxies /api to the backend (see vite.config.ts)
+const BASE_URL = import.meta.env.VITE_API_URL || "";
 
 export class ApiError extends Error {
   status: number;
