@@ -16,7 +16,7 @@ services:
 
     envVars:
       - key: PYTHON_VERSION
-        value: "3.12.11"
+        value: "3.12.8"
 
       - key: ENVIRONMENT
         value: production
@@ -45,7 +45,7 @@ services:
         sync: false
 
       - key: OPENROUTER_MODEL
-        value: meta-llama/llama-3.1-8b-instruct:free
+        value: meta-llama/llama-3.3-70b-instruct:free
 
       - key: OPENROUTER_FALLBACK_MODEL
         value: meta-llama/llama-3.1-70b-instruct

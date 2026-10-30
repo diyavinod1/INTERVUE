@@ -98,13 +98,13 @@ def _topic_question_cap(state: InterviewState, topic: str) -> int:
     planned = next((t for t in plan.topics if t.name == topic), None)
     if planned and planned.source in {"behavioral", "situational"}:
         return 1
-    if topic == "Resume-wide background":
-        return 1
+    if planned and planned.source == "resume":
+        return 2
     # Give the first role-skill question a chance to stand on its own before
     # the interview returns to human/behavioral signals. Later, a revisit can
     # still be selected when the longer interview has room for depth.
     if planned and planned.source == "job":
-        return 1
+        return 2
     return _MAX_QUESTIONS_PER_TOPIC
 
 
@@ -178,7 +178,13 @@ def decide_next_action_node(state: InterviewState) -> InterviewState:
 
     # Answer was too thin/unclear to trust a score-based decision.
     if evaluation.completeness <= 3.0 and evaluation.overall_score <= 5.0:
-        state["next_action"] = "CLARIFY"
+        # Check if the previous turn was already a clarification to prevent repetitive clarify loops
+        previous_eval = state.get("evaluation_history", [])[-2] if len(state.get("evaluation_history", [])) >= 2 else {}
+        if previous_eval.get("recommended_action") == "CLARIFY" or state.get("next_action") == "CLARIFY":
+            state["current_difficulty"] = _step_difficulty(state["current_difficulty"], down=True)
+            state["next_action"] = "DECREASE_DIFFICULTY"
+        else:
+            state["next_action"] = "CLARIFY"
         return state
 
     if evaluation.overall_score <= _WEAK_THRESHOLD:

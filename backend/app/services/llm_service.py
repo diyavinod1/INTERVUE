@@ -93,8 +93,15 @@ class LLMService:
         topic_source: str,
         recent_conversation: str,
         question_history: list[str],
+        latest_answer_analysis: str = "",
+        latest_answer: str = "",
+        latest_question: str = "",
     ) -> str:
         try:
+            analysis_text = latest_answer_analysis
+            if not analysis_text and latest_answer:
+                analysis_text = f"LATEST QUESTION ASKED: {latest_question}\nCANDIDATE'S ACTUAL ANSWER: {latest_answer}"
+
             raw = await self._run(
                 question_generator_prompt,
                 {
@@ -108,19 +115,21 @@ class LLMService:
                     "topic_source": topic_source,
                     "recent_conversation": recent_conversation,
                     "question_history": "\n".join(f"- {q}" for q in question_history[-15:]) or "(none yet)",
+                    "latest_answer_analysis": analysis_text or "(No previous answer in this turn.)",
                 },
-                temperature=0.8,
-                max_tokens=200,
+                temperature=0.65,
+                max_tokens=350,
                 json_mode=False,
             )
             return raw.strip().strip('"')
         except LLMProviderError as e:
-            logger.error("question_generation_failed error=%s -- using deterministic fallback", e)
-            return _fallback_question(current_topic, current_difficulty, action)
+            logger.error("question_generation_failed error=%s -- using context-aware fallback", e)
+            return _fallback_question(current_topic, current_difficulty, action, latest_answer=latest_answer)
 
     async def generate_opening_question(
         self, *, candidate_name: str, candidate_context: str, full_resume: str, job_context: str, opening_focus: str
     ) -> str:
+        first_name = candidate_name.split()[0] if candidate_name else "there"
         try:
             raw = await self._run(
                 opening_question_prompt,
@@ -132,16 +141,20 @@ class LLMService:
                     "opening_focus": opening_focus,
                 },
                 temperature=0.7,
-                max_tokens=220,
+                max_tokens=300,
                 json_mode=False,
             )
             return raw.strip().strip('"')
         except LLMProviderError as e:
-            logger.error("opening_question_generation_failed error=%s -- using deterministic fallback", e)
+            logger.error("opening_question_generation_failed error=%s -- using human fallback", e)
+            if "introduce" in opening_focus.lower() or "career story" in opening_focus.lower():
+                return (
+                    f"Hi {first_name}, thanks for taking the time to speak today. "
+                    "To start off, could you introduce yourself and walk me through the key highlights and experiences most relevant to this role?"
+                )
             return (
-                f"Hi {candidate_name.split()[0] if candidate_name else 'there'}, thanks for joining. "
-                f"I've reviewed your background - let's start with {opening_focus}. "
-                f"Could you walk me through your experience with it?"
+                f"Hi {first_name}, thanks for joining. I've reviewed your background and would love to start by exploring your work with {opening_focus}. "
+                "Could you walk me through the architecture and your primary contributions there?"
             )
 
     # ---- Evaluation ----
@@ -206,44 +219,56 @@ def _role_of(message) -> str:
     return mapping.get(message.type, "user")
 
 
-def _fallback_question(topic: str, difficulty: str, action: str) -> str:
-    """Used only if OpenRouter (primary + fallback model) is fully
-    unreachable, so the interview can still proceed rather than crash."""
+def _fallback_question(topic: str, difficulty: str, action: str, latest_answer: str = "") -> str:
+    """Used only if OpenRouter (primary + fallback model) is fully unreachable.
+    Formulates a realistic, professional engineering question grounded in the topic
+    rather than asking generic chatbot filler."""
+    clean_topic = topic.replace("Resume-wide background", "Core Engineering Projects")
+
     if action == "ASK_BEHAVIORAL_QUESTION":
-        if topic == "Introduce yourself & career story":
-            return "To start, could you tell me about yourself and walk me through the experiences that have shaped your career so far?"
-        if topic == "Motivation & role fit":
-            return "What interests you about this role, and what are you hoping to contribute and learn next?"
-        return f"Can you tell me about a time you demonstrated {topic.lower()} in a project, internship, or team setting?"
+        if "introduce" in clean_topic.lower() or "career story" in clean_topic.lower():
+            return "To kick things off, could you briefly introduce yourself and walk me through the key projects and milestones that shaped your background?"
+        if "motivation" in clean_topic.lower() or "role fit" in clean_topic.lower():
+            return "What specifically drew you to this role, and how does it align with the technical challenges you're eager to tackle next?"
+        return f"Could you walk me through a situation where you had to lead or navigate {clean_topic.lower()} in a past project or engineering team?"
+
     if action == "ASK_SITUATIONAL_QUESTION":
-        return f"Imagine a realistic situation involving {topic.lower()}. What would you do first, and why?"
+        return f"Imagine a high-stakes scenario involving {clean_topic.lower()} where requirements are ambiguous and deadlines are tight. How would you prioritize your initial steps?"
+
     if action == "CHANGE_TOPIC":
-        return f"Let's move to a different area - can you tell me about your experience with {topic}?"
+        return f"That gives clear perspective. Let's switch gears over to {clean_topic}—walk me through how you've designed or built components in this area."
+
     if action == "INCREASE_DIFFICULTY":
-        return f"Let's go a level deeper on {topic} - what edge cases or trade-offs would you consider?"
+        return f"Let's explore the scale and edge cases of {clean_topic}: how would you architect this to guarantee high throughput, fault tolerance, and zero data loss?"
+
     if action == "DECREASE_DIFFICULTY":
-        return f"Let's take a step back - can you explain the fundamentals of {topic} in your own words?"
+        return f"Let's step back to core architecture: what are the primary building blocks and standard lifecycle when implementing {clean_topic}?"
+
     if action == "CLARIFY":
-        return "Could you clarify or expand on what you just said?"
-    return f"Can you tell me more about your experience with {topic}?"
+        return f"Walk me through the concrete technical mechanics and trade-offs of the approach you just described for {clean_topic}."
+
+    if action == "FOLLOW_UP":
+        return f"Looking closer at how you'd execute that in {clean_topic}, what are the most critical failure modes or bottlenecks you would anticipate?"
+
+    return f"Walk me through your practical hands-on experience designing and debugging systems involving {clean_topic}."
 
 
 def _fallback_evaluation(answer: str) -> AnswerEvaluation:
-    """Neutral, conservative fallback used only if the evaluator LLM call
-    fails entirely - keeps the interview moving (as FOLLOW_UP) rather than
-    silently corrupting scoring state."""
+    """Neutral fallback used only if the evaluator LLM call fails entirely.
+    Keeps the interview moving constructively as a FOLLOW_UP without triggering
+    artificial clarification traps."""
     word_count = len(answer.split())
-    base_score = 5.0 if word_count >= 15 else 3.0
+    base_score = 6.0 if word_count >= 15 else (5.0 if word_count >= 5 else 4.0)
     return AnswerEvaluation(
         overall_score=base_score,
         correctness=base_score,
-        completeness=base_score,
+        completeness=5.0,
         technical_depth=base_score,
-        relevance=base_score,
-        clarity=base_score,
-        strengths=[],
-        weaknesses=["Automated evaluation was unavailable for this answer."],
+        relevance=5.0,
+        clarity=5.0,
+        strengths=["Candidate provided a responsive answer."],
+        weaknesses=["Automated evaluation was temporarily unavailable; conservative baseline applied."],
         missing_concepts=[],
-        feedback="Evaluation service temporarily unavailable; neutral score applied.",
+        feedback="Evaluation service temporarily unavailable; standard baseline score applied.",
         recommended_action="FOLLOW_UP",
     )

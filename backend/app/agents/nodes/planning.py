@@ -40,9 +40,18 @@ async def create_plan_node(state: InterviewState) -> InterviewState:
     )
     priority += 1
 
+    # Candidate's standout project or practical experience - dynamically named from resume
+    resume_topic_name = "Core Technical Projects & Background"
+    if profile.projects:
+        resume_topic_name = f"Project: {profile.projects[0].name}"
+    elif profile.experience:
+        resume_topic_name = f"Experience at {profile.experience[0].organization}"
+    elif profile.technologies:
+        resume_topic_name = f"{profile.technologies[0]} Architecture & Implementation"
+
     topics.append(
         PlannedTopic(
-            name="Resume-wide background",
+            name=resume_topic_name,
             priority=priority, source="resume", expected_difficulty="medium"
         )
     )

@@ -16,9 +16,15 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+raw_db_url = settings.database_url
+# Render and Heroku provision PostgreSQL connection strings starting with postgres://
+# SQLAlchemy 1.4+ and 2.0+ require postgresql://
+if raw_db_url.startswith("postgres://"):
+    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(settings.database_url, connect_args=_connect_args, pool_pre_ping=True)
+_connect_args = {"check_same_thread": False} if raw_db_url.startswith("sqlite") else {}
+
+engine = create_engine(raw_db_url, connect_args=_connect_args, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

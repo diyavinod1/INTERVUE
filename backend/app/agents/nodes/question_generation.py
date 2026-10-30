@@ -1,7 +1,13 @@
 """
 GENERATE QUESTION node (PRD Sec. 19).
 """
-from app.agents.prompts.context import render_candidate_profile, render_full_resume, render_job_profile, render_recent_conversation
+from app.agents.prompts.context import (
+    render_candidate_profile,
+    render_full_resume,
+    render_job_profile,
+    render_latest_answer_analysis,
+    render_recent_conversation,
+)
 from app.agents.state import InterviewState
 from app.services.llm_service import LLMService
 
@@ -25,6 +31,14 @@ async def generate_question_node(state: InterviewState) -> InterviewState:
             opening_focus=state["interview_plan"].opening_focus or state["current_topic"],
         )
     else:
+        current_eval = state.get("current_evaluation")
+        eval_dict = current_eval.model_dump() if current_eval else None
+        latest_answer_analysis = render_latest_answer_analysis(
+            latest_question=state.get("current_question", ""),
+            latest_answer=state.get("current_answer", ""),
+            evaluation=eval_dict,
+        )
+
         question = await _llm.generate_question(
             candidate_name=state["candidate_name"],
             candidate_context=candidate_context,
@@ -36,6 +50,9 @@ async def generate_question_node(state: InterviewState) -> InterviewState:
             topic_source=state.get("current_topic_source", "resume"),
             recent_conversation=render_recent_conversation(state.get("conversation_history", [])),
             question_history=state.get("question_history", []),
+            latest_answer_analysis=latest_answer_analysis,
+            latest_answer=state.get("current_answer", ""),
+            latest_question=state.get("current_question", ""),
         )
 
     state["generated_question"] = question

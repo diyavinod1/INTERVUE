@@ -77,19 +77,61 @@ def render_plan(plan: InterviewPlan) -> str:
     return "\n".join(lines)
 
 
-def render_recent_conversation(conversation_history: list[dict], max_turns: int = 6) -> str:
-    """Only the most recent N turns - this is the "sensible context management"
-    referenced in PRD Sec. 23, so prompts don't grow unbounded over a long
-    interview."""
+def render_recent_conversation(conversation_history: list[dict], max_turns: int = 8) -> str:
+    """Renders recent dialogue turns in order so the model remembers past turns."""
     recent = conversation_history[-max_turns:]
     if not recent:
         return "(This is the first question of the interview.)"
 
     lines = []
-    for turn in recent:
+    for i, turn in enumerate(recent, 1):
         q = sanitize_for_prompt(turn.get("question", ""), label="previous question")
         a = sanitize_for_prompt(turn.get("answer", ""), label="previous answer")
+        topic = turn.get("topic", "")
+        diff = turn.get("difficulty", "")
         score = turn.get("evaluation", {}).get("overall_score")
-        lines.append(f"Q ({turn.get('topic', '')}, {turn.get('difficulty', '')}): {q}")
-        lines.append(f"A: {a}" + (f"  [scored {score}/10]" if score is not None else ""))
+        score_str = f" [score: {score}/10]" if score is not None else ""
+        lines.append(f"Turn {i} [{topic} | {diff}]{score_str}:")
+        lines.append(f"  Interviewer: {q}")
+        lines.append(f"  Candidate: {a}")
+    return "\n".join(lines)
+
+
+def render_latest_answer_analysis(
+    latest_question: str,
+    latest_answer: str,
+    evaluation: dict | None,
+) -> str:
+    """Highlights the exact turn just completed, with strengths, weaknesses,
+    missing concepts, and claims to challenge."""
+    if not latest_question and not latest_answer:
+        return "(No answers submitted yet; this is the opening question.)"
+
+    q_clean = sanitize_for_prompt(latest_question, label="latest question")
+    a_clean = sanitize_for_prompt(latest_answer, label="latest answer")
+
+    lines = [
+        f"LATEST QUESTION ASKED: {q_clean}",
+        f"CANDIDATE'S ACTUAL ANSWER: {a_clean}",
+    ]
+
+    if evaluation:
+        score = evaluation.get("overall_score")
+        strengths = evaluation.get("strengths") or []
+        weaknesses = evaluation.get("weaknesses") or []
+        missing = evaluation.get("missing_concepts") or []
+        feedback = evaluation.get("feedback") or ""
+
+        lines.append("TECHNICAL EVALUATION OF THIS ANSWER:")
+        if score is not None:
+            lines.append(f"- Overall Score: {score}/10")
+        if strengths:
+            lines.append(f"- Demonstrated Strengths: {'; '.join(strengths)}")
+        if weaknesses:
+            lines.append(f"- Gaps / Weaknesses / Vague claims: {'; '.join(weaknesses)}")
+        if missing:
+            lines.append(f"- Missing Concepts (worth probing): {'; '.join(missing)}")
+        if feedback:
+            lines.append(f"- Evaluator Note: {feedback}")
+
     return "\n".join(lines)

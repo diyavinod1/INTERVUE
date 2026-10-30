@@ -48,9 +48,10 @@ class OpenRouterProvider(LLMProvider):
         max_tokens: int = 600,
         json_mode: bool = False,
     ) -> LLMResponse:
-        if not self.settings.openrouter_api_key:
+        api_key = self.settings.openrouter_api_key.strip().strip('"').strip("'")
+        if not api_key:
             raise LLMProviderError(
-                "OPENROUTER_API_KEY is not set. Add it to backend/.env (see .env.example)."
+                "OPENROUTER_API_KEY is not set. Add it to backend/.env or your Render environment settings."
             )
 
         try:
@@ -62,7 +63,7 @@ class OpenRouterProvider(LLMProvider):
             logger.warning(
                 "primary_model_failed model=%s error=%s -- attempting fallback",
                 self.settings.openrouter_model,
-                type(primary_error).__name__,
+                primary_error,
             )
             if not self.settings.openrouter_fallback_model:
                 raise LLMProviderError(f"Primary model failed and no fallback configured: {primary_error}") from primary_error
@@ -76,10 +77,11 @@ class OpenRouterProvider(LLMProvider):
                 logger.error(
                     "fallback_model_failed model=%s error=%s",
                     self.settings.openrouter_fallback_model,
-                    type(fallback_error).__name__,
+                    fallback_error,
                 )
                 raise LLMProviderError(
-                    f"Both primary and fallback models failed. primary={primary_error} fallback={fallback_error}"
+                    f"Both primary ({self.settings.openrouter_model}) and fallback ({self.settings.openrouter_fallback_model}) models failed. "
+                    f"primary={primary_error} fallback={fallback_error}"
                 ) from fallback_error
 
     async def _call_with_retries(
@@ -110,11 +112,13 @@ class OpenRouterProvider(LLMProvider):
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
 
+        api_key = self.settings.openrouter_api_key.strip().strip('"').strip("'")
+        frontend_origin = (self.settings.frontend_url or "http://localhost:5173").split(",")[0].strip().rstrip("/")
         headers = {
-            "Authorization": f"Bearer {self.settings.openrouter_api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             # Recommended by OpenRouter for attribution / rate-limit tiers.
-            "HTTP-Referer": self.settings.frontend_url or "http://localhost:5173",
+            "HTTP-Referer": frontend_origin or "http://localhost:5173",
             "X-Title": "Intervue",
         }
 
@@ -132,6 +136,10 @@ class OpenRouterProvider(LLMProvider):
 
         if resp.status_code == 429 or resp.status_code >= 500:
             raise _RetryableError(f"status={resp.status_code} body={resp.text[:200]}")
+        if resp.status_code == 401:
+            raise LLMProviderError(f"OpenRouter authentication failed (401). Please verify OPENROUTER_API_KEY: {resp.text[:200]}")
+        if resp.status_code == 402:
+            raise LLMProviderError(f"OpenRouter payment required (402). Model '{model}' requires paid credits or quota exceeded: {resp.text[:200]}")
         if resp.status_code >= 400:
             raise LLMProviderError(f"OpenRouter error {resp.status_code}: {resp.text[:300]}")
 

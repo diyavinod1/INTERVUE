@@ -41,13 +41,13 @@ def mock_llm(monkeypatch):
     async def fake_plan_rationales(self, *, candidate_context, job_context, topic_names):
         return {"rationales": {n: f"Explores {n}." for n in topic_names}, "opening_focus": topic_names[0]}
 
-    async def fake_opening_question(self, *, candidate_name, candidate_context, job_context, opening_focus):
+    async def fake_opening_question(self, *, candidate_name, candidate_context, job_context, opening_focus, **kwargs):
         return f"Hi {candidate_name}, let's start with {opening_focus}."
 
     async def fake_generate_question(self, **kwargs):
-        return f"[{kwargs['action']}] Tell me more about {kwargs['current_topic']}."
+        return f"[{kwargs.get('action', 'FOLLOW_UP')}] Tell me more about {kwargs.get('current_topic', 'background')}."
 
-    async def fake_evaluate(self, *, topic, difficulty, question, answer):
+    async def fake_evaluate(self, *, topic, difficulty, question, answer, **kwargs):
         score = state["score_queue"].pop(0) if state["score_queue"] else 6.0
         return AnswerEvaluation(
             overall_score=score, correctness=score, completeness=score,
