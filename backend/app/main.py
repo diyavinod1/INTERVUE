@@ -33,7 +33,8 @@ async def lifespan(app: FastAPI):
 
 
 def _redacted_db_url() -> str:
-    url = settings.database_url
+    from app.db.database import db_url
+    url = db_url
     if "@" in url:
         scheme_and_creds, host_part = url.rsplit("@", 1)
         scheme = scheme_and_creds.split("://")[0]

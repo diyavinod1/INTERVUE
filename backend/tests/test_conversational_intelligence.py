@@ -28,6 +28,31 @@ def _check_no_robotic_phrases(text: str):
         assert phrase not in lower, f"Robotic phrase '{phrase}' found in generated text: {text}"
 
 
+def test_database_url_normalization_with_psycopg2_driver():
+    from app.db.database import normalize_database_url
+    from sqlalchemy import create_engine
+
+    urls = [
+        ("postgres://user:pass@localhost:5432/intervue", "postgresql+psycopg2://user:pass@localhost:5432/intervue"),
+        ("postgresql://user:pass@localhost:5432/intervue", "postgresql+psycopg2://user:pass@localhost:5432/intervue"),
+        ("postgresql+psycopg://user:pass@localhost:5432/intervue", "postgresql+psycopg2://user:pass@localhost:5432/intervue"),
+        ("postgresql+psycopg2://user:pass@localhost:5432/intervue", "postgresql+psycopg2://user:pass@localhost:5432/intervue"),
+        ("sqlite:///./intervue.db", "sqlite:///./intervue.db"),
+    ]
+
+    for input_url, expected_normalized in urls:
+        normalized = normalize_database_url(input_url)
+        assert normalized == expected_normalized
+        # Verify SQLAlchemy loads the installed psycopg2 driver without ModuleNotFoundError
+        test_engine = create_engine(normalized)
+        if "postgresql" in normalized:
+            assert test_engine.dialect.name == "postgresql"
+            assert test_engine.dialect.driver == "psycopg2"
+        else:
+            assert test_engine.dialect.name == "sqlite"
+
+
+
 async def test_planning_eliminates_robotic_resume_wide_background():
     profile = CandidateProfile(
         projects=[Project(name="CloudStream", description="Kafka streaming service", technologies=["Kafka", "Go"])]

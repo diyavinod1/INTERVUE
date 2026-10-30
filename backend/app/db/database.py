@@ -16,15 +16,35 @@ from app.core.config import get_settings
 
 settings = get_settings()
 
-raw_db_url = settings.database_url
-# Render and Heroku provision PostgreSQL connection strings starting with postgres://
-# SQLAlchemy 1.4+ and 2.0+ require postgresql://
-if raw_db_url.startswith("postgres://"):
-    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
 
-_connect_args = {"check_same_thread": False} if raw_db_url.startswith("sqlite") else {}
+def normalize_database_url(url: str) -> str:
+    """
+    Ensure PostgreSQL URLs explicitly specify the installed psycopg2 driver:
+    - postgres:// -> postgresql+psycopg2:// (Render / Heroku legacy scheme)
+    - postgresql:// -> postgresql+psycopg2:// (Supabase / standard PostgreSQL default)
+    - postgresql+psycopg:// -> postgresql+psycopg2:// (Redirect Psycopg 3 URLs to psycopg2)
+    - postgresql+psycopg2:// -> retained
+    - sqlite:// -> retained
+    """
+    if not url:
+        return "sqlite:///./intervue.db"
 
-engine = create_engine(raw_db_url, connect_args=_connect_args, pool_pre_ping=True)
+    clean = url.strip()
+    if clean.startswith("postgresql+psycopg2://"):
+        return clean
+    if clean.startswith("postgresql+psycopg://"):
+        return clean.replace("postgresql+psycopg://", "postgresql+psycopg2://", 1)
+    if clean.startswith("postgresql://"):
+        return clean.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if clean.startswith("postgres://"):
+        return clean.replace("postgres://", "postgresql+psycopg2://", 1)
+    return clean
+
+
+db_url = normalize_database_url(settings.database_url)
+_connect_args = {"check_same_thread": False} if db_url.startswith("sqlite") else {}
+
+engine = create_engine(db_url, connect_args=_connect_args, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
