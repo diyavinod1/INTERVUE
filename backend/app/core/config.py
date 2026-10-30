@@ -38,7 +38,9 @@ class Settings(BaseSettings):
     # ---- Sarvam (Voice) ----
     sarvam_api_key: str = ""
     sarvam_base_url: str = "https://api.sarvam.ai"
-    sarvam_tts_voice: str = "meera"
+    sarvam_tts_voice: str = "dev_en_conversational"
+    sarvam_tts_model: str = "bulbul:v4-flash"
+    sarvam_tts_pace: float = 1.0
     sarvam_stt_language: str = "en-IN"
     enable_voice_fallback: bool = True
 

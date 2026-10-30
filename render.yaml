@@ -66,7 +66,10 @@ services:
         value: https://api.sarvam.ai
 
       - key: SARVAM_TTS_VOICE
-        value: meera
+        value: dev_en_conversational
+
+      - key: SARVAM_TTS_MODEL
+        value: bulbul:v4-flash
 
       - key: SARVAM_STT_LANGUAGE
         value: en-IN

@@ -205,17 +205,20 @@ class SarvamTTSProvider(TextToSpeechService):
             "Content-Type": "application/json",
         }
 
+        speaker = voice or self.settings.sarvam_tts_voice or "dev_en_conversational"
+        model = getattr(self.settings, "sarvam_tts_model", "bulbul:v4-flash") or "bulbul:v4-flash"
+        target_language = language or self.settings.sarvam_stt_language or "en-IN"
+        pace = float(getattr(self.settings, "sarvam_tts_pace", 1.0) or 1.0)
+
         body = {
             "inputs": [text],
-            "target_language_code": (
-                language
-                or self.settings.sarvam_stt_language
-            ),
-            "speaker": (
-                voice
-                or self.settings.sarvam_tts_voice
-            ),
-            "model": "bulbul:v3",
+            "target_language_code": target_language,
+            "speaker": speaker,
+            "model": model,
+            "enable_preprocessing": True,
+            "pace": pace,
+            "speech_sample_rate": 24000,
+            "output_audio_codec": "wav",
         }
 
         try:
